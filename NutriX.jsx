@@ -352,23 +352,32 @@ function computeGoals(p) {
 }
 
 /* ================================================================== */
-/* Persistent storage helpers (real cross-session save via window.storage) */
+/* Persistent storage helpers — real browser localStorage.               */
+/* This saves data permanently on THIS device/browser (survives closing  */
+/* the tab and restarting the phone). It does NOT sync between devices — */
+/* for that you'd need the Supabase backend from supabaseClient.js.      */
 /* ================================================================== */
 async function storageGet(key) {
-  try { const r = await window.storage.get(key, false); return r ? r.value : null; }
+  try { return localStorage.getItem(key); }
   catch (e) { return null; }
 }
 async function storageSet(key, value) {
-  try { await window.storage.set(key, value, false); return true; }
+  try { localStorage.setItem(key, value); return true; }
   catch (e) { return false; }
 }
 async function storageDelete(key) {
-  try { await window.storage.delete(key, false); return true; }
+  try { localStorage.removeItem(key); return true; }
   catch (e) { return false; }
 }
 async function storageListKeys(prefix) {
-  try { const r = await window.storage.list(prefix, false); return (r && r.keys) || []; }
-  catch (e) { return []; }
+  try {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(prefix)) keys.push(k);
+    }
+    return keys;
+  } catch (e) { return []; }
 }
 
 /* ================================================================== */
