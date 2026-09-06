@@ -8,6 +8,16 @@ import {
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from "recharts";
+import { createClient } from "@supabase/supabase-js";
+
+/* ================================================================== */
+/* Real cross-device backend (Supabase).                                */
+/* Fill these in with YOUR project's values from                        */
+/* Supabase Dashboard → Settings → API                                  */
+/* ================================================================== */
+const SUPABASE_URL = "https://gngitckqaneufixsmvoz.supabase.co"; // <-- replace this
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduZ2l0Y2txYW5ldWZpeHNtdm96Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1OTI2ODEsImV4cCI6MjEwNDE2ODY4MX0.qiD7KZEcSlSAkCn45c9Yr-1mLvW7vei1PPFKnrCpJoE"; // <-- replace this
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 /* ================================================================== */
 /* i18n                                                                 */
@@ -352,32 +362,34 @@ function computeGoals(p) {
 }
 
 /* ================================================================== */
-/* Persistent storage helpers — real browser localStorage.               */
-/* This saves data permanently on THIS device/browser (survives closing  */
-/* the tab and restarting the phone). It does NOT sync between devices — */
-/* for that you'd need the Supabase backend from supabaseClient.js.      */
+/* Real cross-device account data, backed by Supabase (a real database). */
+/* Signing in on a new phone pulls the same data down from the cloud.    */
+/* Dark-mode preference stays in localStorage — that's a per-device UI   */
+/* setting, not account data, so it's fine to keep it simple.            */
 /* ================================================================== */
-async function storageGet(key) {
-  try { return localStorage.getItem(key); }
-  catch (e) { return null; }
+function getLocalPref(key) {
+  try { return localStorage.getItem(key); } catch (e) { return null; }
 }
-async function storageSet(key, value) {
-  try { localStorage.setItem(key, value); return true; }
-  catch (e) { return false; }
+function setLocalPref(key, value) {
+  try { localStorage.setItem(key, value); } catch (e) { /* ignore */ }
 }
-async function storageDelete(key) {
-  try { localStorage.removeItem(key); return true; }
-  catch (e) { return false; }
-}
-async function storageListKeys(prefix) {
+
+async function fetchAppData(userId) {
   try {
-    const keys = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith(prefix)) keys.push(k);
-    }
-    return keys;
-  } catch (e) { return []; }
+    const { data, error } = await supabase.from("app_data").select("data").eq("user_id", userId).single();
+    if (error || !data) return null;
+    return data.data;
+  } catch (e) { return null; }
+}
+async function saveAppData(userId, blob) {
+  try {
+    await supabase.from("app_data").upsert({ user_id: userId, data: blob, updated_at: new Date().toISOString() });
+    return true;
+  } catch (e) { return false; }
+}
+async function deleteAppData(userId) {
+  try { await supabase.from("app_data").delete().eq("user_id", userId); return true; }
+  catch (e) { return false; }
 }
 
 /* ================================================================== */
@@ -428,8 +440,8 @@ async function callClaude({ system, messages, maxTokens = 1000 }) {
 /* ================================================================== */
 /* Main App                                                             */
 /* ================================================================== */
-const emptyAccountState = () => ({
-  profile: { name: "", age: 27, gender: "male", height: 170, weight: 65, activityLevel: "moderate", goal: "maintain" },
+const emptyAccountState = (name) => ({
+  profile: { name: name || "", age: 27, gender: "male", height: 170, weight: 65, activityLevel: "moderate", goal: "maintain" },
   goals: null, todayLog: [], water: 0, xp: 0, level: 1, streak: 1, totalLogs: 0, photoLogs: 0,
   hydrationHits: 0, dessertLogs: 0, snackLogs: 0, beverageLogs: 0, cuisinesTried: [], unlockedBadges: [],
   weightHistory: [], onboarded: false,
@@ -441,8 +453,8 @@ export default function NutriXApp() {
   const [darkMode, setDarkMode] = useState(false);
   const [booting, setBooting] = useState(true);
 
-  const [accounts, setAccounts] = useState({});
-  const [currentUser, setCurrentUser] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null); // email, for display only
+  const [userId, setUserId] = useState(null); // Supabase auth user id — the real account key
   const [stage, setStage] = useState("auth");
   const [tab, setTab] = useState("home");
   const [catalogTypeFilter, setCatalogTypeFilter] = useState("all");
@@ -476,23 +488,29 @@ export default function NutriXApp() {
     cal: acc.cal + m.cal, p: acc.p + m.p, c: acc.c + m.c, f: acc.f + m.f,
   }), { cal: 0, p: 0, c: 0, f: 0 }), [todayLog]);
 
-  // ---- hydrate from real persistent storage on first mount ----
+  // ---- on open: check Supabase for a real, already-logged-in session ----
+  // (Supabase keeps the session token itself — this works across devices as long
+  // as you log in with the same email/password on each one.)
   useEffect(() => {
     (async () => {
-      const dm = await storageGet("settings:darkMode");
+      const dm = getLocalPref("settings:darkMode");
       if (dm !== null) setDarkMode(dm === "true");
-      const keys = await storageListKeys("account:");
-      const loaded = {};
-      for (const k of keys) {
-        const raw = await storageGet(k);
-        if (raw) { try { loaded[k.slice("account:".length)] = JSON.parse(raw); } catch (e) { /* skip corrupt */ } }
-      }
-      setAccounts(loaded);
-      const sessionUser = await storageGet("session:current");
-      if (sessionUser && loaded[sessionUser]) {
-        setCurrentUser(sessionUser);
-        loadAccountIntoState(loaded[sessionUser]);
-        setStage(loaded[sessionUser].onboarded ? "main" : "onboarding");
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      const session = sessionData && sessionData.session;
+      if (session && session.user) {
+        setCurrentUser(session.user.email);
+        setUserId(session.user.id);
+        const blob = await fetchAppData(session.user.id);
+        if (blob) {
+          loadAccountIntoState(blob);
+          setStage(blob.onboarded ? "main" : "onboarding");
+        } else {
+          // logged in but no saved data yet (shouldn't normally happen) — start fresh
+          const fresh = emptyAccountState(session.user.email);
+          loadAccountIntoState(fresh);
+          setStage("onboarding");
+        }
       }
       setBooting(false);
     })();
@@ -579,27 +597,27 @@ export default function NutriXApp() {
   }
 
   async function handleAuth({ mode, name, email, password }) {
-    const key = email.trim().toLowerCase();
+    const cleanEmail = email.trim().toLowerCase();
     if (mode === "signup") {
-      if (accounts[key]) return false;
-      const blob = emptyAccountState();
-      blob.profile.name = name;
-      const record = { password, ...blob };
-      setAccounts((prev) => ({ ...prev, [key]: record }));
-      setCurrentUser(key);
+      const { data, error } = await supabase.auth.signUp({ email: cleanEmail, password });
+      if (error || !data.user) return { ok: false, message: error ? error.message : "Sign up failed." };
+      const blob = emptyAccountState(name);
+      await saveAppData(data.user.id, blob);
+      setCurrentUser(cleanEmail);
+      setUserId(data.user.id);
       loadAccountIntoState(blob);
       setStage("onboarding");
-      await storageSet(`account:${key}`, JSON.stringify(record));
-      await storageSet("session:current", key);
-      return true;
+      return { ok: true };
     } else {
-      const acc = accounts[key];
-      if (!acc || acc.password !== password) return false;
-      setCurrentUser(key);
-      loadAccountIntoState(acc);
-      setStage(acc.onboarded ? "main" : "onboarding");
-      await storageSet("session:current", key);
-      return true;
+      const { data, error } = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
+      if (error || !data.user) return { ok: false, message: error ? error.message : "Log in failed." };
+      const blob = await fetchAppData(data.user.id);
+      const finalBlob = blob || emptyAccountState(name);
+      setCurrentUser(cleanEmail);
+      setUserId(data.user.id);
+      loadAccountIntoState(finalBlob);
+      setStage(finalBlob.onboarded ? "main" : "onboarding");
+      return { ok: true };
     }
   }
 
@@ -611,34 +629,30 @@ export default function NutriXApp() {
   }
 
   async function logOut() {
-    setCurrentUser(null); setStage("auth"); setTab("home");
-    await storageDelete("session:current");
+    await supabase.auth.signOut();
+    setCurrentUser(null); setUserId(null); setStage("auth"); setTab("home");
   }
 
   async function deleteAccountData() {
-    if (!currentUser) return;
-    const key = currentUser;
-    await storageDelete(`account:${key}`);
-    await storageDelete("session:current");
-    setAccounts((prev) => { const n = { ...prev }; delete n[key]; return n; });
-    setCurrentUser(null); setStage("auth"); setTab("home"); setSettingsOpen(false);
+    if (!userId) return;
+    await deleteAppData(userId);
+    await supabase.auth.signOut();
+    setCurrentUser(null); setUserId(null); setStage("auth"); setTab("home"); setSettingsOpen(false);
   }
 
   function toggleDarkMode() {
-    setDarkMode((d) => { const nd = !d; storageSet("settings:darkMode", String(nd)); return nd; });
+    setDarkMode((d) => { const nd = !d; setLocalPref("settings:darkMode", String(nd)); return nd; });
   }
 
-  // persist the logged-in user's live state to real storage on every change
+  // save the logged-in user's live state to the real database on every change
   useEffect(() => {
-    if (!currentUser || booting) return;
-    const password = accounts[currentUser] ? accounts[currentUser].password : undefined;
+    if (!userId || booting) return;
     const blob = {
-      password, profile, goals, todayLog, water, xp, level, streak, totalLogs, photoLogs, hydrationHits,
+      profile, goals, todayLog, water, xp, level, streak, totalLogs, photoLogs, hydrationHits,
       dessertLogs, snackLogs, beverageLogs, cuisinesTried: Array.from(cuisinesTried),
       unlockedBadges: Array.from(unlockedBadges), weightHistory, onboarded: stage === "main",
     };
-    setAccounts((prev) => ({ ...prev, [currentUser]: { ...prev[currentUser], ...blob } }));
-    storageSet(`account:${currentUser}`, JSON.stringify(blob));
+    saveAppData(userId, blob);
   }, [profile, goals, todayLog, water, xp, level, streak, totalLogs, photoLogs, hydrationHits, dessertLogs, snackLogs, beverageLogs, cuisinesTried, unlockedBadges, weightHistory, stage]); // eslint-disable-line
 
   useEffect(() => { if (stage === "main") checkBadges({ streak: 1 }); }, [stage]); // eslint-disable-line
@@ -762,9 +776,9 @@ function AuthScreen({ t, lang, setLang, onAuth, darkMode }) {
       setError(t.authError); return;
     }
     setBusy(true);
-    const ok = await onAuth({ mode, name, email, password });
+    const result = await onAuth({ mode, name, email, password });
     setBusy(false);
-    if (!ok) setError(mode === "signup" ? "That email is already registered." : "Incorrect email or password.");
+    if (!result.ok) setError(result.message || "Something went wrong. Please try again.");
   }
 
   return (
