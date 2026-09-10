@@ -9,6 +9,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from "recharts";
 import { createClient } from "@supabase/supabase-js";
+import { Analytics } from "@vercel/analytics/react";
 
 /* ================================================================== */
 /* Real cross-device backend (Supabase).                                */
@@ -721,6 +722,7 @@ export default function NutriXApp() {
         <SettingsModal t={t} lang={lang} setLang={setLang} darkMode={darkMode} onToggleDark={toggleDarkMode}
           email={currentUser} onClose={() => setSettingsOpen(false)} onLogOut={logOut} onDeleteAccount={deleteAccountData} />
       )}
+      <Analytics />
     </div>
   );
 }
