@@ -15,8 +15,8 @@ import { createClient } from "@supabase/supabase-js";
 /* Fill these in with YOUR project's values from                        */
 /* Supabase Dashboard → Settings → API                                  */
 /* ================================================================== */
-const SUPABASE_URL = "https://YOUR-PROJECT.supabase.co"; // <-- replace this
-const SUPABASE_ANON_KEY = "YOUR-ANON-PUBLIC-KEY"; // <-- replace this
+const SUPABASE_URL = "https://gngitckqaneufixsmvoz.supabase.co"; // <-- replace this
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduZ2l0Y2txYW5ldWZpeHNtdm96Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1OTI2ODEsImV4cCI6MjEwNDE2ODY4MX0.qiD7KZEcSlSAkCn45c9Yr-1mLvW7vei1PPFKnrCpJoE"; // <-- replace this
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 /* ================================================================== */
